@@ -2,7 +2,7 @@
 
 This document is a comprehensive integration guide for frontend developers connecting to the **Movie Recommendation API** backend. 
 
-The backend is built with **FastAPI** and uses a hybrid recommendation approach: **Content-Based Filtering** (using local TF-IDF cosine similarity matrices) and **Genre/Popularity-based discovery** via external movie databases.
+The backend is built with **FastAPI** and uses a hybrid recommendation approach: **Content-Based Filtering** (using local TF-IDF cosine similarity matrices) and **Genre/Popularity-based discovery** via OMDb and the local dataset.
 
 ---
 
@@ -14,44 +14,56 @@ The backend is built with **FastAPI** and uses a hybrid recommendation approach:
 
 ---
 
+## 🔄 TMDB to OMDb Migration Highlights
+If you are upgrading from an older version of this API, note the following critical changes:
+- **IMDb IDs**: All movie identifiers are now alphanumeric string IMDb IDs (`imdb_id`, e.g., `"tt0137523"`) instead of TMDB integer IDs (`tmdb_id`, e.g., `550`).
+- **Home Feed**: The `/home` endpoint query parameter `cat` has been replaced with `sort`. The backend now sorts local dataset entries instead of using external TMDB feeds.
+- **Genre Recommendations**: The `/recommendations/genre` endpoint (fixed typo from `/genra`) now queries by movie `title` (string) rather than a TMDB genre/movie ID.
+- **Genres Array**: Genres are returned as a flat list of strings (`string[]`), e.g., `["Action", "Sci-Fi"]` instead of an array of TMDB genre objects.
+
+---
+
 ## 📦 Data Models (TypeScript Definitions)
 
 To ensure type-safe integration in your React/Angular/Vue frontend, you can use the following TypeScript interfaces corresponding to the Pydantic schemas in the backend.
 
 ```typescript
 // Standard card used for listings, grids, and recommendation lists
-export interface TMDBMovieCard {
-  tmdb_id: number;
+export interface OMDBMovieCard {
+  imdb_id: string | null;
   title: string;
   poster_url: string | null;
-  release_date: string | null;
-  vote_average: number | null;
+  year: string | null;
+  local_rating: number | null; // From local dataset (vote_average/popularity)
 }
 
 // Full detailed representation of a specific movie
-export interface TMDBMovieDetails {
-  tmdb_id: number;
+export interface OMDBMovieDetails {
+  imdb_id: string | null;
   title: string;
-  overview: string | null;
-  release_date: string | null;
+  plot: string | null;
+  year: string | null;
   poster_url: string | null;
-  backdrop_url: string | null;
-  genres: Array<{ id: number; name: string }>;
+  genres: string[]; // Flat list of parsed genre names
+  imdb_rating: string | null;
+  runtime: string | null;
+  director: string | null;
+  actors: string | null;
 }
 
 // Single content-based recommendation item calculated using TF-IDF
 export interface TFIDFRecItem {
   title: string;
   score: number; // Cosine similarity score [0.0 - 1.0]
-  tmdb: TMDBMovieCard | null; // Detailed provider metadata/card if found
+  omdb: OMDBMovieCard | null; // Detailed provider metadata/card if found
 }
 
 // Hybrid recommendation search bundle
 export interface SearchBundleResponse {
   query: string;
-  movie_details: TMDBMovieDetails;
+  movie_details: OMDBMovieDetails;
   tfidf_recommendations: TFIDFRecItem[];
-  genre_recommendations: TMDBMovieCard[];
+  genre_recommendations: OMDBMovieCard[];
 }
 ```
 
@@ -85,77 +97,114 @@ export interface SearchBundleResponse {
 
 ### 3. Movie Home Feed
 * **Endpoint**: `GET /home`
-* **Description**: Returns movies based on categories (popular, trending, top rated, upcoming, or now playing).
+* **Description**: Returns movies sorted by popularity or rating from the local dataset, enriched with OMDb posters and metadata.
 * **Query Parameters**:
-  - `cat` (string, optional): One of `"popular"`, `"top_rated"`, `"upcoming"`, `"now_playing"`, or `"trending"`. *Default:* `"popular"`.
+  - `sort` (string, optional): One of `"popular"` or `"top_rated"`. *Default:* `"popular"`.
   - `limit` (integer, optional): Max cards to return. Range: `1` to `50`. *Default:* `24`.
 * **Sample Request**:
-  `GET http://127.0.0.1:8080/home?cat=popular&limit=5`
-* **Response (`TMDBMovieCard[]`)**:
+  `GET http://127.0.0.1:8080/home?sort=popular&limit=5`
+* **Response (`OMDBMovieCard[]`)**:
   ```json
   [
     {
-      "tmdb_id": 550,
+      "imdb_id": "tt0137523",
       "title": "Fight Club",
-      "poster_url": "http://img.omdbapi.com/?apikey=YOUR_KEY&/bptfV8Y76OIunv9f9996rK8v3f.jpg",
-      "release_date": "1999-10-15",
-      "vote_average": 8.433
+      "poster_url": "https://m.media-amazon.com/images/M/MV5BNDIzNDU0YzEtYzE5Ni00ZjlkLTk5ZjgtNjM3NWE4YzA3Nzk3XkEyXkFqcGdeQXVyMjUzOTY1NTc@._V1_SX300.jpg",
+      "year": "1999",
+      "local_rating": 8.3
     }
   ]
   ```
 
 ---
 
-### 4. Raw Provider Movie Search
-* **Endpoint**: `GET /odbm/search`
-* **Description**: Performs a direct keyword query on the backing movie database for multi-result matches (ideal for autocomplete or search grids).
+### 4. Raw OMDb Movie Search
+* **Endpoint**: `GET /omdb/search`
+* **Description**: Performs a direct keyword query on the backing OMDb database for multi-result matches (ideal for autocomplete or search grids).
 * **Query Parameters**:
   - `query` (string, required): Title keyword or query phrase. *Min length: 2*.
   - `page` (integer, optional): Page offset. Range: `1` to `10`. *Default:* `1`.
 * **Sample Request**:
-  `GET http://127.0.0.1:8080/odbm/search?query=interstellar&page=1`
-* **Response**: Returns the raw JSON payload from the data provider search API.
-
----
-
-### 5. Detailed Movie Lookup
-* **Endpoint**: `GET /movie/id/{tmdb_id}`
-* **Description**: Resolves comprehensive details for a movie.
-* **Path Parameters**:
-  - `tmdb_id` (integer or string, required): Unique identifier of the movie.
-* **Response (`TMDBMovieDetails`)**:
+  `GET http://127.0.0.1:8080/omdb/search?query=interstellar&page=1`
+* **Response**: Returns the raw JSON payload from the OMDb Search API. This typically takes the form:
   ```json
   {
-    "tmdb_id": 157336,
-    "title": "Interstellar",
-    "overview": "The adventures of a group of explorers who make use of a newly discovered wormhole...",
-    "release_date": "2014-11-05",
-    "poster_url": "http://img.omdbapi.com/?apikey=YOUR_KEY&/gEU2Qv6Xg778g3v6vG6uU467U.jpg",
-    "backdrop_url": "http://img.omdbapi.com/?apikey=YOUR_KEY&/xJH0z8mgoisb6933uW8u.jpg",
-    "genres": [
-      { "id": 12, "name": "Adventure" },
-      { "id": 18, "name": "Drama" },
-      { "id": 878, "name": "Science Fiction" }
-    ]
+    "Search": [
+      {
+        "Title": "Interstellar",
+        "Year": "2014",
+        "imdbID": "tt0816692",
+        "Type": "movie",
+        "Poster": "https://m.media-amazon.com/images/M/MV5BZjdkOTU3MDktN2IxOS00OGI1LWEyYTUtYjU5NjE0YTg0NGY5XkEyXkFqcGdeQXVyMTMxODk2OTU@._V1_SX300.jpg"
+      }
+    ],
+    "totalResults": "1",
+    "Response": "True"
   }
   ```
-* **⚠️ WARNING (Known Bug)**: This endpoint is currently broken on the backend (it attempts to `await` the integer `tmdb_id`). See the **Bugs & Patches** section below for details.
 
 ---
 
-### 6. Genre-Based Recommendations
-* **Endpoint**: `GET /recommendations/genra` *(Note spelling: `/genra`)*
-* **Description**: Pulls similar recommendations belonging to the same primary genre of a given reference movie ID.
+### 5. Detailed Movie Lookup by IMDb ID
+* **Endpoint**: `GET /movie/id/{imdb_id}`
+* **Description**: Resolves comprehensive details for a movie using its IMDb string identifier.
+* **Path Parameters**:
+  - `imdb_id` (string, required): Unique string IMDb identifier of the movie (e.g., `"tt0816692"`).
+* **Response (`OMDBMovieDetails`)**:
+  ```json
+  {
+    "imdb_id": "tt0816692",
+    "title": "Interstellar",
+    "plot": "A team of explorers travel through a wormhole in space in an attempt to ensure humanity's survival.",
+    "year": "2014",
+    "poster_url": "https://m.media-amazon.com/images/M/MV5BZjdkOTU3MDktN2IxOS00OGI1LWEyYTUtYjU5NjE0YTg0NGY5XkEyXkFqcGdeQXVyMTMxODk2OTU@._V1_SX300.jpg",
+    "genres": [
+      "Adventure",
+      "Drama",
+      "Sci-Fi"
+    ],
+    "imdb_rating": "8.7",
+    "runtime": "169 min",
+    "director": "Christopher Nolan",
+    "actors": "Matthew McConaughey, Anne Hathaway, Jessica Chastain"
+  }
+  ```
+
+---
+
+### 6. Detailed Movie Lookup by Title
+* **Endpoint**: `GET /movie/title/{title}`
+* **Description**: Directly looks up comprehensive movie details on OMDb using an exact title string.
+* **Path Parameters**:
+  - `title` (string, required): Exact title of the movie (e.g., `"Interstellar"`).
+* **Response (`OMDBMovieDetails`)**: Same structure as `GET /movie/id/{imdb_id}`.
+
+---
+
+### 7. Genre-Based Recommendations
+* **Endpoint**: `GET /recommendations/genre`
+* **Description**: Pulls similar recommendations belonging to the same primary genres from the local dataset, sorted by ratings.
 * **Query Parameters**:
-  - `tbdm_id` (integer, required): Reference movie ID. *(Note spelling: `tbdm_id`)*
-  - `limit` (integer, optional): Maximum recommendations. *Default/Internal validation warning: see below.*
-* **⚠️ WARNING (Known Bug)**: This endpoint will fail with a `422 Validation Error` or `500 Server Error` under default values. Refer to the **Bugs & Patches** section below before calling.
+  - `title` (string, required): Reference movie title (must exist in the local dataset).
+  - `limit` (integer, optional): Maximum recommendations. Range: `1` to `50`. *Default:* `18`.
+* **Response (`OMDBMovieCard[]`)**:
+  ```json
+  [
+    {
+      "imdb_id": "tt1375666",
+      "title": "Inception",
+      "poster_url": "https://m.media-amazon.com/images/M/MV5BMjAxMzY3NjcxNF5BMl5BanBnXkFtZTcwNTI5OTM0Mw@@._V1_SX300.jpg",
+      "year": "2010",
+      "local_rating": 8.1
+    }
+  ]
+  ```
 
 ---
 
-### 7. Search & Hybrid Recommendation Bundle
+### 8. Search & Hybrid Recommendation Bundle
 * **Endpoint**: `GET /search/movies`
-* **Description**: The main entry point for a detailed details-and-recommendations view. Given a single movie query, it returns the best matched movie's details, localized content-based TF-IDF recommendations, and genre-similar movies.
+* **Description**: The main entry point for a detailed details-and-recommendations view. Given a single movie query, it matches the title in the local dataset first (fuzzy match if exact is not found), fetches OMDb details, and generates both localized content-based TF-IDF recommendations and genre-similar recommendations.
 * **Query Parameters**:
   - `query` (string, required): Title search query. *Min length: 1*.
   - `tfidf_top_n` (integer, optional): Max TF-IDF content recommendations. Range: `1` to `30`. *Default:* `12`.
@@ -165,173 +214,51 @@ export interface SearchBundleResponse {
   {
     "query": "Inception",
     "movie_details": {
-      "tmdb_id": 27205,
+      "imdb_id": "tt1375666",
       "title": "Inception",
-      "overview": "Cobb, a skilled thief...",
-      "release_date": "2010-07-15",
-      "poster_url": "http://img.omdbapi.com/?apikey=YOUR_KEY&/t3clWb2E4aYh2X7q3K.jpg",
-      "backdrop_url": "http://img.omdbapi.com/?apikey=YOUR_KEY&/qisb28G7X8.jpg",
+      "plot": "A thief who steals corporate secrets through the use of dream-sharing technology is given the inverse task of planting an idea into the mind of a C.E.O.",
+      "year": "2010",
+      "poster_url": "https://m.media-amazon.com/images/M/MV5BMjAxMzY3NjcxNF5BMl5BanBnXkFtZTcwNTI5OTM0Mw@@._V1_SX300.jpg",
       "genres": [
-        { "id": 28, "name": "Action" },
-        { "id": 878, "name": "Science Fiction" }
-      ]
+        "Action",
+        "Sci-Fi",
+        "Adventure"
+      ],
+      "imdb_rating": "8.8",
+      "runtime": "148 min",
+      "director": "Christopher Nolan",
+      "actors": "Leonardo DiCaprio, Joseph Gordon-Levitt, Elliot Page"
     },
     "tfidf_recommendations": [
       {
         "title": "Interstellar",
         "score": 0.812401,
-        "tmdb": {
-          "tmdb_id": 157336,
+        "omdb": {
+          "imdb_id": "tt0816692",
           "title": "Interstellar",
-          "poster_url": "...",
-          "release_date": "2014-11-05",
-          "vote_average": 8.3
+          "poster_url": "https://m.media-amazon.com/images/M/MV5BZjdkOTU3MDktN2IxOS00OGI1LWEyYTUtYjU5NjE0YTg0NGY5XkEyXkFqcGdeQXVyMTMxODk2OTU@._V1_SX300.jpg",
+          "year": "2014",
+          "local_rating": 8.3
         }
       }
     ],
     "genre_recommendations": [
       {
-        "tmdb_id": 299536,
+        "imdb_id": "tt4154988",
         "title": "Avengers: Infinity War",
-        "poster_url": "...",
-        "release_date": "2018-04-25",
-        "vote_average": 8.3
+        "poster_url": "https://m.media-amazon.com/images/M/MV5BMTk4ODQzNDY3Ml5BMl5BanBnXkFtZTcwNDg0MDY3ODk@._V1_SX300.jpg",
+        "year": "2018",
+        "local_rating": 8.3
       }
     ]
   }
   ```
-* **⚠️ WARNING (Known Bug)**: This endpoint contains critical typos that prevent it from completing. See below.
 
 ---
 
-## 🛠️ Known Backend Bugs & Recommended Patches (For Backend Devs)
+## 💡 Frontend Integration Example (axios / TypeScript)
 
-If you are developing the frontend and experience errors, the backend code has some structural bugs. Share these exact fixes with the backend developer or patch `Main.py` directly:
-
-### 1. `/movie/id/{tmdb_id}` is non-functional
-- **The Issue**: It attempts to `await` the path parameter `tmdb_id` (a string/integer) directly, causing a `TypeError`.
-- **The Fix**: Change the router function to correctly await `omdb_movie_details`:
-  ```python
-  @app.get("/movie/id/{tmdb_id}", response_model=TMDBMovieDetails)
-  async def movie_deatils(tmdb_id: int):
-      return await omdb_movie_details(tmdb_id)
-  ```
-
-### 2. `/recommendations/genra` throws validation/runtime errors
-- **The Issues**:
-  1. `limit` default is `18` but has constraint `le=5`, throwing validation errors immediately.
-  2. The function assigns to `deatils` but attempts to read from `details` on the next line (raises `NameError`).
-  3. The `response_model` is a single card (`TMDBMovieCard`), but the function returns a `List[TMDBMovieCard]` (raises response validation error).
-- **The Fix**:
-  ```python
-  @app.get("/recommendations/genra", response_model=List[TMDBMovieCard])
-  async def Recommendations(
-      tbdm_id : int = Query(...),
-      limit: int = Query(18, ge=1, le=50) # Increased le to allow defaults
-  ):
-      details = await omdb_movie_details(tbdm_id) # Correct spelling
-      if not details.genres:
-          return []
-      
-      genre_id = details.genres[0]["id"]
-      discover = await omdb_get(
-          "/discover/movie",
-          {
-              "with_genres": genre_id,
-              "language": "en-US",
-              "sort_by": "popularity.desc",
-              "page": 1,
-          },
-      )
-      cards = await omdb_card_from_res(discover.get("results", []), limit=limit)
-      return [c for c in cards if c.tmdb_id != tbdm_id]
-  ```
-
-### 3. `/search/movies` crashes during search resolution
-- **The Issues**:
-  1. It tries to get `best["id"]` from the search response dict. However, the search response wraps list items under a `"results"` key, making `best` a container, not a single movie.
-  2. In `omdb_movie_details`, `backdrop_url=omdb_get(data.get("backdrop_path"))` is calling `omdb_get` synchronously without `await` and with missing arguments.
-  3. It calls `await omdb_get(discover.get("results", []), limit=genre_limit)` inside `/search/movies` which crashes. It was supposed to call the mapping utility `omdb_card_from_res`.
-- **The Fix**:
-  ```python
-  # Correcting omdb_movie_details backdrop_url assignment:
-  async def omdb_movie_details(movie_id: int) -> TMDBMovieDetails:
-      data = await omdb_get(f"/movie/{movie_id}", {"language": "en-US"})
-      return TMDBMovieDetails(
-          tmdb_id=int(data["id"]),
-          title=data.get("title") or "",
-          overview=data.get("overview"),
-          release_date=data.get("release_date"),
-          poster_url=making_img_url(data.get("poster_path")),
-          backdrop_url=making_img_url(data.get("backdrop_path")), # Fixed helper call
-          genres=data.get("genres", []) or [],
-      )
-
-  # Correcting /search/movies route handler:
-  @app.get("/search/movies", response_model=SearchBundleResponse)
-  async def Search_mov(
-      query: str = Query(..., min_length=1),
-      tfidf_top_n: int = Query(12, ge=1, le=30),
-      genre_limit: int = Query(12, ge=1, le=30),
-  ):
-      best_raw = await odbm_search(query)
-      results = best_raw.get("results", [])
-      if not results:
-          raise HTTPException(
-              status_code=404, detail=f"No TMDB movie found for query: {query}"
-          )
-
-      best = results[0] # Grab the first matched movie dict
-      tmdb_id = int(best["id"])
-      details = await omdb_movie_details(tmdb_id)
-
-      # 1) TF-IDF recommendations
-      tfidf_items: List[TFIDFRecItem] = []
-      recs: List[tuple[str, float]] = []
-      try:
-          recs = tfidf_recommend_titles(details.title, top_n=tfidf_top_n)
-      except Exception:
-          try:
-              recs = tfidf_recommend_titles(query, top_n=tfidf_top_n)
-          except Exception:
-              recs = []
-
-      for title, score in recs:
-          card = await attach_tmdb_card_by_title(title)
-          tfidf_items.append(TFIDFRecItem(title=title, score=score, tmdb=card))
-
-      # 2) Genre recommendations (TMDB discover by first genre)
-      genre_recs: List[TMDBMovieCard] = []
-      if details.genres:
-          genre_id = details.genres[0]["id"]
-          discover = await omdb_get(
-              "/discover/movie",
-              {
-                  "with_genres": genre_id,
-                  "language": "en-US",
-                  "sort_by": "popularity.desc",
-                  "page": 1,
-              },
-          )
-          # Changed from omdb_get to omdb_card_from_res
-          cards = await omdb_card_from_res(
-              discover.get("results", []), limit=genre_limit
-          )
-          genre_recs = [c for c in cards if c.tmdb_id != details.tmdb_id]
-
-      return SearchBundleResponse(
-          query=query,
-          movie_details=details,
-          tfidf_recommendations=tfidf_items,
-          genre_recommendations=genre_recs,
-      )
-  ```
-
----
-
-## 💡 Frontend Integration Example (axios / native fetch)
-
-Below is an elegant React utility block demonstrating how to integrate these endpoints:
+Below is an elegant React utility block demonstrating how to integrate these endpoints with proper type-safety:
 
 ```typescript
 import axios from 'axios';
@@ -339,19 +266,31 @@ import axios from 'axios';
 const BASE_URL = 'http://127.0.0.1:8080';
 
 export const movieApi = {
-  // Get home categories (e.g. popular, trending)
-  getHomeFeed: async (category = 'popular', limit = 24): Promise<TMDBMovieCard[]> => {
-    const response = await axios.get(`${BASE_URL}/home`, {
-      params: { cat: category, limit }
+  // Get home categories (e.g. popular, top_rated)
+  getHomeFeed: async (sort: 'popular' | 'top_rated' = 'popular', limit = 24): Promise<OMDBMovieCard[]> => {
+    const response = await axios.get<OMDBMovieCard[]>(`${BASE_URL}/home`, {
+      params: { sort, limit }
     });
     return response.data;
   },
 
   // Perform search / recommendations bundle
-  getMovieBundle: async (query: string): Promise<SearchBundleResponse> => {
-    const response = await axios.get(`${BASE_URL}/search/movies`, {
-      params: { query }
+  getMovieBundle: async (query: string, tfidfTopN = 12, genreLimit = 12): Promise<SearchBundleResponse> => {
+    const response = await axios.get<SearchBundleResponse>(`${BASE_URL}/search/movies`, {
+      params: { query, tfidf_top_n: tfidfTopN, genre_limit: genreLimit }
     });
+    return response.data;
+  },
+
+  // Lookup by IMDb ID
+  getMovieDetailsById: async (imdbId: string): Promise<OMDBMovieDetails> => {
+    const response = await axios.get<OMDBMovieDetails>(`${BASE_URL}/movie/id/${imdbId}`);
+    return response.data;
+  },
+
+  // Lookup by Exact Title
+  getMovieDetailsByTitle: async (title: string): Promise<OMDBMovieDetails> => {
+    const response = await axios.get<OMDBMovieDetails>(`${BASE_URL}/movie/title/${encodeURIComponent(title)}`);
     return response.data;
   }
 };

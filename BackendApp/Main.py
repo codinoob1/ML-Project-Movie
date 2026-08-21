@@ -245,7 +245,10 @@ def _details_from_omdb_payload(data: dict) -> OMDBMovieDetails:
         director=data.get("Director") if data.get("Director") != "N/A" else None,
         actors=data.get("Actors") if data.get("Actors") != "N/A" else None,
     )
+   
 
+
+# these is a helper function to normalize titles for caching
 
 async def attach_omdb_card_by_title(
     title: str, local_rating: Optional[float] = None
