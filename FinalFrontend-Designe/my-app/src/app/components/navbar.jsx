@@ -1,5 +1,12 @@
 import { Button } from "@/components/base/buttons/button";
+import {useRouter} from "next/navigation";
+
 export default function Navbar() {
+  const router = useRouter();
+  const sendFinder = ()=>{
+    router.push("/movie-finders");
+  }
+  
   return (
     <nav className="w-full border-b border-white/10 bg-[#080f25]/90 text-white backdrop-blur-xl">
       <div className="flex min-h-22 items-center justify-between gap-6 px-5 py-4 sm:px-10">
@@ -11,7 +18,7 @@ export default function Navbar() {
         </div>
         <div className="hidden items-center gap-3 sm:flex sm:gap-5">
           <span className="hidden text-sm font-semibold text-white/40 sm:inline">Movie Recommendation Engine</span>
-          <Button color="secondary" size="lg" className="border border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white">
+          <Button color="secondary" size="lg" className="border border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white" onClick={sendFinder}>
             Open App &rarr;
           </Button>
         </div>
