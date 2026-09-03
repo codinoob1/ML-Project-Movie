@@ -4,13 +4,14 @@ import { useState } from "react";
 import { Button } from "@/components/base/buttons/button";
 import Navbar from "./components/navbar";
 import MovieCard from "./components/movie-card";
+import Link from "next/link";
 
 const movies = [
   {
     title: "Interstellar",
     description:
       "A team of explorers travel through a wormhole in space in an attempt to ensure humanity's survival.",
-    imageUrl: "https://image.tmdb.org/t/p/w500/nBNZadXqJSdt05SHLqgT0HuC5Gm.jpg",
+    imageUrl: "https://image.tmdb.org/t/p/original/yQvGrMoipbRoddT0ZR8tPoR7NfX.jpg",
     tags: ["Sci-Fi"],
     year: "2014",
     rating: "8.7",
